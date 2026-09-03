@@ -1,1 +1,317 @@
+---
+title: "Praktikum2-Autokorelasi.Rmd"
+author: "Siti Keira Zuleyqa"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# library
+```{r}
+library(dplyr)
+library(lmtest) 
+library(orcutt)
+library(HoRM)
+```
+# Soal 1: Market Share dan Price
+## input data
+```{r}
+periode <- 1:20
+marketshare <- c(3.63,4.20,3.33,4.54,2.89,4.87,4.90,5.29,6.18,7.20,
+                  7.25,6.09,6.80,8.65,8.43,8.29,7.18,7.90,8.45,8.23)
+price <- c(0.97,0.95,0.99,0.91,0.98,0.90,0.89,0.86,0.85,0.82,
+           0.79,0.83,0.81,0.77,0.76,0.80,0.83,0.79,0.76,0.78)
+dt1 <- data.frame(periode, marketshare, price)
+dt1
+```
+
+## eksplorasi data
+```{r}
+plot(price, marketshare, pch = 20, col = "brown",
+     main = "Scatter Plot Price vs Market Share",
+     xlab = "Price",
+     ylab = "Market Share")
+```
+```{r}
+cor(price, marketshare)
+```
+Berdasarkan scatter plot dapat dilihat adanya hubungan negatif yang cukup kuat antara variabel price dan market share. Artinya, peningkatan harga cenderung diikuti oleh penurunan market share. Hubungan tersebut juga didukung oleh nilai korelasi sebesar -0.9752564.
+
+## model regresi
+```{r}
+model1 <- lm(marketshare ~ price, data = dt1)
+summary(model1)
+```
+Model regresi yang dihasilkan adalah
+$$ \hat{y_i}= 26.910-24.290x_i$$
+Berdasarkan hasil regresi, price berpengaruh negatif dan signifikan terhadap market share (p-value < 0,05). Setiap kenaikan price satu satuan diperkirakan menurunkan market share sebesar 24,290 satuan. Nilai $R^2$ = 0,9511 menunjukkan bahwa 95,11% variasi market share dapat dijelaskan oleh price.
+
+## eksplorasi sisaan
+```{r}
+sisaan1 <- residuals(model1)
+fitValue1 <- predict(model1)
+
+par(mfrow = c(1,2))
+plot(fitValue1, sisaan1, col = "brown", pch = 20,
+     xlab = "Fitted Values", ylab = "Sisaan", main = "Sisaan vs Fitted Values")
+abline(h = 0, lwd = 2)
+plot(periode, sisaan1, type = "b", col = "brown", pch = 20,
+     xlab = "Periode", ylab = "Sisaan", main = "Sisaan vs Order")
+abline(h = 0, lwd = 2)
+```
+Plot sisaan terhadap fitted value dan urutan periode menunjukkan pola yang cenderung tidak acak, terutama adanya fluktuasi naik-turun pada sisaan. Hal ini mengindikasikan kemungkinan adanya autokorelasi, sehingga perlu dilakukan pemeriksaan lebih lanjut menggunakan plot ACF dan PACF serta uji Durbin-Watson.
+
+```{r}
+par(mfrow = c(1,2))
+acf(sisaan1, main = "ACF Sisaan")
+pacf(sisaan1, main = "PACF Sisaan")
+```
+
+## uji durbin watson
+```{r}
+dwtest(model1)
+```
+Berdasarkan uji Durbin-Watson dapat disimpulkan bahwa terdapat autokorelasi positif pada sisaan.
+
+## penanganan autokorelasi
+### Metode Cochrane-Orcutt
+```{r}
+modelCO1 <- cochrane.orcutt(model1)
+modelCO1
+```
+Diperoleh model regresi setelah penanganan autokorelasi dengan metode Cochrane-Orcutt sebagai berikut:
+
+$$ \hat{y}_i=26,7221-24,0841x_i $$
+
+Nilai Durbin-Watson meningkat menjadi 1,9580 dengan p-value = 0,4151. Nilai tersebut memenuhi kriteria $DU<DW<4-DU$, yaitu $1,41<1,9580<2,59$. Selain itu, p-value > 0,05 sehingga H₀ tidak ditolak, yang menunjukkan bahwa tidak terdapat autokorelasi pada sisaan setelah transformasi. Nilai $\hat{\rho}$ optimum yang diperoleh adalah 0,4252.
+
+Selanjutnya, dilakukan transformasi data secara manual menggunakan nilai $\hat{\rho}=0,4252$ yang diperoleh dari metode Cochrane-Orcutt. Transformasi dilakukan pada variabel market share dan price dengan mengurangkan nilai observasi sebelumnya yang telah dikalikan dengan $\hat{\rho}$. Hasil transformasi kemudian digunakan untuk membentuk model regresi baru.
+
+```{r}
+rho1 <- modelCO1$rho
+ms.trans <- marketshare[-1] - marketshare[-20]*rho1
+price.trans <- price[-1] - price[-20]*rho1
+modelCO1.manual <- lm(ms.trans ~ price.trans)
+summary(modelCO1.manual)
+```
+Koefisien dari model transformasi belum merupakan koefisien model regresi asli. Oleh karena itu, intersep perlu dikembalikan ke bentuk semula menggunakan hubungan $\beta_0^*=\beta_0(1-\hat{\rho})$ dan $\beta_1^*=\beta_1$.
+
+```{r}
+b0.bintang1 <- modelCO1.manual$coefficients[1]
+b0.1 <- b0.bintang1/(1-rho1)
+b1.1 <- modelCO1.manual$coefficients[2]
+b0.1
+b1.1
+```
+Hasil perhitungan koefisien regresi secara manual menunjukkan hasil yang sama dengan model yang diperoleh menggunakan package orcutt, yaitu:
+
+$$ \hat{y}_i=26,7221-24,0841x_i $$
+
+Selanjutnya, dilakukan pengujian Durbin-Watson pada model transformasi untuk memastikan bahwa autokorelasi telah teratasi.
+```{r}
+dwtest(modelCO1.manual)
+```
+### Metode Hildreth-Lu
+```{r}
+r <- seq(0, 0.9, by = 0.1)
+tab1 <- data.frame(rho = r,
+                    SSE = sapply(r, function(rr){deviance(hildreth.lu(marketshare, price, rr))}))
+tab1
+```
+Hasil pencarian menunjukkan bahwa SSE minimum berada di sekitar $\rho=0,4$. Oleh karena itu, pencarian nilai $\rho$ selanjutnya dipersempit di sekitar nilai tersebut dengan tingkat ketelitian yang lebih tinggi.
+
+```{r}
+rOpt1 <- seq(0.3, 0.5, by = 0.001)
+tabOpt1 <- data.frame(rho = rOpt1,
+                       SSE = sapply(rOpt1, function(rr){deviance(hildreth.lu(marketshare, price, rr))}))
+head(tabOpt1[order(tabOpt1$SSE),])
+```
+```{r}
+par(mfrow = c(1,1))
+plot(tab1$SSE ~ tab1$rho, type = "l", xlab = "Rho", ylab = "SSE",
+     main = "Pencarian Rho Optimum - Market Share")
+rho1.opt <- tabOpt1[which.min(tabOpt1$SSE), "rho"]
+abline(v = rho1.opt, lty = 2, col = "brown", lwd = 2)
+```
+Diperoleh nilai $\rho$ optimum sebesar 0,425, yang menghasilkan nilai SSE terkecil. Nilai tersebut kemudian digunakan dalam fungsi hildreth.lu() untuk membentuk model, dilanjutkan dengan pengujian Durbin-Watson dan transformasi balik koefisien regresi ke model awal.
+
+```{r}
+modelHL1 <- hildreth.lu(marketshare, price, rho1.opt)
+summary(modelHL1)
+```
+Setelah dilakukan transformasi balik, diperoleh model regresi dengan metode Hildreth-Lu sebagai berikut:
+
+$$ \hat{y_i}=26,7227−24,0848x_i $$
+```{r}
+dwtest(modelHL1)
+```
+Diperoleh nilai DW = 1,9577 dengan p-value = 0,4148. Nilai tersebut berada pada rentang $DU < DW < 4-DU$ $(1,41 < 1,9577 < 2,59)$, sehingga H₀ tidak ditolak. Artinya, belum terdapat cukup bukti adanya autokorelasi pada sisaan model hasil penanganan Hildreth-Lu.
+
+## perbandingan model
+```{r}
+sseModelawal1 <- deviance(model1)
+sseModelCO1 <- deviance(modelCO1.manual)
+sseModelHL1 <- deviance(modelHL1)
+
+akurasi1 <- matrix(c(sseModelawal1, sseModelCO1, sseModelHL1), nrow = 1)
+colnames(akurasi1) <- c("Model Awal", "Cochrane-Orcutt", "Hildreth-Lu")
+rownames(akurasi1) <- "SSE"
+akurasi1
+```
+Diperoleh nilai SSE pada model awal sebesar 3,308257, sedangkan setelah penanganan autokorelasi dengan metode Cochrane-Orcutt dan Hildreth-Lu masing-masing sebesar 2,659368. Penurunan SSE menunjukkan bahwa kedua metode mampu memperbaiki model, dengan hasil SSE yang sama.
+
+# Soal 2: Sales dan Advertising
+## input data
+```{r}
+tahun <- 1975:2014
+sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+advertising <- c(9.4,9.6,10,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                 13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                 15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                 18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+dt2 <- data.frame(tahun, sales, advertising)
+dt2
+```
+
+## eksplorasi data
+```{r}
+plot(advertising, sales, pch = 20, col = "brown",
+     main = "Scatter Plot Advertising vs Sales",
+     xlab = "Advertising",
+     ylab = "Sales")
+```
+```{r}
+cor(advertising, sales)
+```
+Berdasarkan scatter plot, terlihat adanya hubungan positif yang sangat kuat antara advertising dan sales, dengan nilai korelasi sebesar 0,9796.
+
+## model regresi
+```{r}
+model2 <- lm(sales ~ advertising, data = dt2)
+summary(model2)
+```
+Model regresi yang dihasilkan adalah
+$$ \hat{y_i}= 5.96513+0.71035x_i$$
+
+Berdasarkan hasil regresi, advertising berpengaruh positif dan signifikan terhadap sales (p-value < 0,05). Setiap kenaikan advertising satu satuan diperkirakan meningkatkan sales sebesar 0,71035 satuan. Nilai $R^2 = 0,9596$ menunjukkan bahwa 95,96% variasi sales dapat dijelaskan oleh advertising.
+
+## eksplorasi sisaan
+```{r}
+sisaan2 <- residuals(model2)
+fitValue2 <- predict(model2)
+
+par(mfrow = c(1,2))
+plot(fitValue2, sisaan2, col = "brown", pch = 20,
+     xlab = "Fitted Values", ylab = "Sisaan", main = "Sisaan vs Fitted Values")
+abline(h = 0, lwd = 2)
+plot(tahun, sisaan2, type = "b", col = "brown", pch = 20,
+     xlab = "Tahun", ylab = "Sisaan", main = "Sisaan vs Order")
+abline(h = 0, lwd = 2)
+```
+Plot sisaan terhadap fitted value dan urutan periode menunjukkan pola yang cenderung tidak acak, ditandai dengan adanya pola naik-turun pada sisaan. Hal ini mengindikasikan kemungkinan adanya autokorelasi, sehingga dilakukan pemeriksaan lebih lanjut melalui plot ACF dan PACF serta uji Durbin-Watson.
+
+```{r}
+par(mfrow = c(1,2))
+acf(sisaan2, main = "ACF Sisaan")
+pacf(sisaan2, main = "PACF Sisaan")
+```
+## uji durbin watson
+```{r}
+dwtest(model2)
+```
+Berdasarkan uji Durbin-Watson dapat disimpulkan bahwa terdapat autokorelasi positif pada sisaan.
+
+## penanganan autokorelasi
+### Metode Cochrane-Orcutt
+```{r}
+modelCO2 <- cochrane.orcutt(model2)
+modelCO2
+```
+Diperoleh model regresi setelah penanganan autokorelasi dengan metode Cochrane-Orcutt sebagai berikut:
+
+$$ \hat{y}_i=10,2524+0,4885x_i $$
+
+Nilai Durbin-Watson meningkat menjadi 1,9393 dengan p-value = 0,378. Karena p-value > 0,05, maka H₀ tidak ditolak, sehingga belum terdapat bukti adanya autokorelasi pada sisaan setelah transformasi. Nilai $\hat{\rho}$ optimum yang diperoleh adalah 0,9031.
+
+Selanjutnya, dilakukan transformasi data secara manual menggunakan nilai $\hat{\rho}=0,9031$ yang diperoleh dari metode Cochrane-Orcutt. Transformasi dilakukan pada variabel sales dan advertising dengan mengurangkan nilai observasi sebelumnya yang telah dikalikan dengan $\hat{\rho}$. Hasil transformasi kemudian digunakan untuk membentuk model regresi baru.
+
+```{r}
+rho2 <- modelCO2$rho
+n2 <- length(sales)
+sales.trans <- sales[-1] - sales[-n2]*rho2
+adv.trans <- advertising[-1] - advertising[-n2]*rho2
+modelCO2.manual <- lm(sales.trans ~ adv.trans)
+summary(modelCO2.manual)
+```
+Koefisien model transformasi belum merupakan koefisien regresi pada model asli. Oleh karena itu, intersep perlu dikembalikan menggunakan hubungan $\beta_0^*=\beta_0(1-\hat{\rho})$, sedangkan koefisien advertising tetap $\beta_1^*=\beta_1$.
+
+```{r}
+b0.bintang2 <- modelCO2.manual$coefficients[1]
+b0.2 <- b0.bintang2/(1-rho2)
+b1.2 <- modelCO2.manual$coefficients[2]
+b0.2
+b1.2
+```
+Hasil perhitungan koefisien regresi secara manual menunjukkan hasil yang sama dengan model yang diperoleh menggunakan package orcutt, yaitu:
+
+$$ \hat{y}_i=10.25237+0.4884891 x_i $$
+
+Selanjutnya, dilakukan pengujian Durbin-Watson pada model transformasi untuk memastikan bahwa autokorelasi telah teratasi.
+```{r}
+dwtest(modelCO2.manual)
+```
+### Metode Hildreth-Lu
+```{r}
+r2 <- seq(0, 0.9, by = 0.1)
+tab2 <- data.frame(rho = r2,
+                    SSE = sapply(r2, function(rr){deviance(hildreth.lu(sales, advertising, rr))}))
+tab2
+```
+Hasil pencarian menunjukkan bahwa SSE minimum berada di sekitar $\rho=0,9$. Oleh karena itu, pencarian nilai $\rho$ selanjutnya dipersempit di sekitar nilai tersebut dengan tingkat ketelitian yang lebih tinggi.
+
+```{r}
+rOpt2 <- seq(0.8, 0.99, by = 0.001)
+tabOpt2 <- data.frame(rho = rOpt2,
+                       SSE = sapply(rOpt2, function(rr){deviance(hildreth.lu(sales, advertising, rr))}))
+head(tabOpt2[order(tabOpt2$SSE),])
+```
+```{r}
+par(mfrow = c(1,1))
+plot(tab2$SSE ~ tab2$rho, type = "l", xlab = "Rho", ylab = "SSE",
+     main = "Pencarian Rho Optimum - Sales")
+rho2.opt <- tabOpt2[which.min(tabOpt2$SSE), "rho"]
+abline(v = rho2.opt, lty = 2, col = "brown", lwd = 2)
+```
+Diperoleh nilai $\rho$ optimum sebesar 0,903, yang menghasilkan SSE terkecil. Nilai tersebut kemudian digunakan dalam fungsi hildreth.lu() untuk membentuk model, dilanjutkan dengan pengujian Durbin-Watson dan transformasi balik koefisien regresi ke model awal.
+
+```{r}
+modelHL2 <- hildreth.lu(sales, advertising, rho2.opt)
+summary(modelHL2)
+```
+Setelah dilakukan transformasi balik, diperoleh model dengan metode Hildreth-Lu sebagai berikut.
+$$ \hat{y_i}=10.2475+0.4887x_i $$
+
+```{r}
+dwtest(modelHL2)
+```
+Diperoleh nilai DW = 1,9393 dengan p-value = 0,378. Nilai tersebut berada pada rentang $DU < DW < 4-DU$ $(1,41 < 1,9393 < 2,59)$, sehingga $H_0$ tidak ditolak. Artinya, belum terdapat cukup bukti adanya autokorelasi pada sisaan model hasil penanganan Hildreth-Lu.
+
+## perbandingan model
+```{r}
+sseModelawal2 <- deviance(model2)
+sseModelCO2 <- deviance(modelCO2.manual)
+sseModelHL2 <- deviance(modelHL2)
+
+akurasi2 <- matrix(c(sseModelawal2, sseModelCO2, sseModelHL2), nrow = 1)
+colnames(akurasi2) <- c("Model Awal", "Cochrane-Orcutt", "Hildreth-Lu")
+rownames(akurasi2) <- "SSE"
+akurasi2
+```
+Diperoleh nilai SSE pada model awal sebesar 10,55453, sedangkan setelah penanganan autokorelasi dengan metode Cochrane-Orcutt dan Hildreth-Lu masing-masing sebesar 1,291225 dan 1,291226. Penurunan SSE menunjukkan bahwa kedua metode mampu memperbaiki model dengan hasil yang hampir sama.
 
